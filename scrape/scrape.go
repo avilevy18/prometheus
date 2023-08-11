@@ -805,12 +805,16 @@ func (s *targetScraper) readResponse(_ context.Context, resp *http.Response, w i
 	return resp.Header.Get("Content-Type"), nil
 }
 
-// A loop can run and be stopped again. It must not be reused after it was stopped.
+// A loop can run and be stopped. The same loop instance must not be reused
+// after it was stopped.
+// stop and stopAfterScrapeAttempt can be invoked multiple times, but after first
+// stop, other invocations do nothing.
 type loop interface {
 	run(errc chan<- error)
 	setForcedError(err error)
 	setScrapeFailureLogger(FailureLogger)
 	stop()
+	stopAfterScrapeAttempt(minScrapeTime time.Time)
 	getCache() *scrapeCache
 	disableEndOfRunStalenessMarkers()
 }
@@ -856,6 +860,7 @@ type scrapeLoop struct {
 	offsetSeed   uint64
 	symbolTable  *labels.SymbolTable
 	metrics      *scrapeMetrics
+	stopAfterScrapeAttemptCh         chan time.Time
 
 	// Options from config.ScrapeConfig.
 	sampleLimit                   int
@@ -894,6 +899,8 @@ type scrapeLoop struct {
 	// Locally cached data.
 	lastScrapeSize                   int
 	disabledEndOfRunStalenessMarkers atomic.Bool
+	skipOffsetting                   bool // For testability.
+	opts                             *Options
 }
 
 // scrapeCache tracks mappings of exposed metric strings to label sets and
@@ -1181,13 +1188,16 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 
 	ctx, cancel := context.WithCancel(opts.sp.ctx)
 	return &scrapeLoop{
-		ctx:         ctx,
-		cancel:      cancel,
-		stopped:     make(chan struct{}),
-		parentCtx:   opts.sp.ctx,
-		appenderCtx: appenderCtx,
-		l:           opts.sp.logger.With("target", opts.target),
-		cache:       opts.cache,
+		ctx:                      ctx,
+		cancel:                   cancel,
+		stopped:                  make(chan struct{}),
+		parentCtx:                opts.sp.ctx,
+		appenderCtx:              appenderCtx,
+		l:                        opts.sp.logger.With("target", opts.target),
+		cache:                    opts.cache,
+		opts:                     opts.sp.options,
+		stopAfterScrapeAttemptCh: make(chan time.Time, 1),
+		skipOffsetting:           opts.sp.options.skipJitterOffsetting,
 
 		interval: opts.interval,
 		timeout:  opts.timeout,
@@ -1261,6 +1271,8 @@ func (sl *scrapeLoop) getScrapeOffset() time.Duration {
 }
 
 func (sl *scrapeLoop) run(errc chan<- error) {
+	defer close(sl.stopAfterScrapeAttemptCh)
+
 	var (
 		last   time.Time
 		ticker = time.NewTicker(sl.interval)
@@ -1287,6 +1299,8 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 			// Continue after a scraping offset.
 		case <-sl.ctx.Done():
 			return
+		case <-sl.stopAfterScrapeAttemptCh:
+			sl.cancel()
 		}
 	}
 
@@ -1298,6 +1312,11 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 		select {
 		case <-sl.ctx.Done():
 			return
+		case minScrapeTime := <-sl.stopAfterScrapeAttemptCh:
+			sl.cancel()
+			if minScrapeTime.Before(last) {
+				return
+			}
 		default:
 		}
 
@@ -1326,6 +1345,11 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 		select {
 		case <-sl.ctx.Done():
 			return
+		case minScrapeTime := <-sl.stopAfterScrapeAttemptCh:
+			sl.cancel()
+			if minScrapeTime.Before(last) {
+				return
+			}
 		case <-ticker.C:
 		}
 	}
@@ -1544,11 +1568,39 @@ func (sl *scrapeLoop) endOfRunStaleness(last time.Time, ticker *time.Ticker, int
 	}
 }
 
-// Stop the scraping. May still write data and stale markers after it has
-// returned. Cancel the context to stop all writes.
+// stop stops the scraping. The loop may still write data and stale markers after
+// stop has returned. Cancel the context (e.g. via Manager.Stop()) to stop all
+// writes or if stop takes too much time.
 func (sl *scrapeLoop) stop() {
+	if sl.cancel == nil {
+		return
+	}
+
 	sl.cancel()
 	<-sl.stopped
+	sl.cancel = nil
+}
+
+// stopAfterScrapeAttempt stops scraping after ensuring the last scrape attempt
+// happened after minScrapeTime. minScrapeTime can't be larger than time.Now.
+//
+// Similar to stop, the loop may still write data and stale markers after
+// stopAfterScrapeAttempt has returned. Cancel the context (e.g. via
+// Manager.Stop()) to stop all writes or if stopAfterScrapeAttempt takes too much
+// time.
+func (sl *scrapeLoop) stopAfterScrapeAttempt(minScrapeTime time.Time) {
+	if sl.cancel == nil {
+		return
+	}
+
+	now := time.Now()
+	if minScrapeTime.After(now) {
+		minScrapeTime = now
+	}
+
+	sl.stopAfterScrapeAttemptCh <- minScrapeTime
+	<-sl.stopped
+	sl.cancel = nil
 }
 
 func (sl *scrapeLoop) disableEndOfRunStalenessMarkers() {

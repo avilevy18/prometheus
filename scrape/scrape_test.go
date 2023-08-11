@@ -477,6 +477,10 @@ func (l *testLoop) stop() {
 	l.stopFunc()
 }
 
+func (l *testLoop) stopAfterScrapeAttempt(_ time.Time) {
+	l.stopFunc()
+}
+
 func (*testLoop) getCache() *scrapeCache {
 	return nil
 }

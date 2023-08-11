@@ -2020,3 +2020,50 @@ func TestManagerReloader(t *testing.T) {
 		})
 	}
 }
+
+func TestManagerStopAfterScrapeAttempt(t *testing.T) {
+	interval := 10 * time.Second
+
+	for _, tcase := range []struct {
+		name                 string
+		stop                 func(m *Manager)
+		expectedSamplesTotal int
+	}{
+		{
+			name:                 "normal stop (no scrape on shutdown)",
+			stop:                 func(m *Manager) { m.Stop() },
+			expectedSamplesTotal: 1, // Only the initial scrape at t=0
+		},
+		{
+			name:                 "stop after scrape attempt (minScrapeTime = now, should scrape)",
+			stop:                 func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
+			expectedSamplesTotal: 2, // Initial scrape + shutdown scrape
+		},
+		{
+			name:                 "stop after scrape attempt (minScrapeTime = 1h ago, should not scrape again because last scrape is fresh enough)",
+			stop:                 func(m *Manager) { m.StopAfterScrapeAttempt(time.Now().Add(-1 * time.Hour)) },
+			expectedSamplesTotal: 1, // Only the initial scrape
+		},
+	} {
+		t.Run(tcase.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				opts := &Options{
+					// We do NOT enable ScrapeOnShutdown here because we want to test StopAfterScrapeAttempt specifically.
+					ScrapeOnShutdown: false,
+				}
+				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts)
+				defer cleanupConns()
+
+				applyDefaultSynctestConfig(t, scrapeManager, interval)
+
+				// Wait for the initial scrape to happen exactly at t=0.
+				synctest.Wait()
+
+				// Stop the manager using the custom stop function.
+				tcase.stop(scrapeManager)
+
+				require.Len(t, findSamplesForMetric(app.ResultSamples(), "expected_metric"), tcase.expectedSamplesTotal)
+			})
+		})
+	}
+}
