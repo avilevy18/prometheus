@@ -161,28 +161,18 @@ type Options struct {
 	// sensitive to start up delays.
 	DiscoveryReloadOnStartup bool
 
-	// InitialScrapeOffset applies an additional baseline delay before we begin
-	// scraping targets. By default, Prometheus calculates a specific offset for
-	// each target to spread the scraping load evenly across the server. Configuring
-	// this option adds a fixed duration to that target-specific offset. This allows
-	// tuning the initial startup delay without overriding the underlying target
-	// jitter, preserving proper load balancing across the scraper pools.
+	// InitialScrapeOffset controls how long after startup we should scrape all
+	// targets.  By default, all targets have an offset so we spread the
+	// scraping load evenly within the Prometheus server. Configuring this will
+	// make it so all targets have the same configured offset, which may be
+	// undesirable as load is no longer evenly spread.  This is useful however
+	// in serverless deployments where we're sensitive to the intitial offsets
+	// and would like them to be small and configurable.
 	//
-	// Setting this offset (e.g., to 10s) is particularly useful in Prometheus
-	// agent mode and OTel's prometheusreceiver when used in serverless job
-	// scenarios. It helps avoid readiness races where targets might not be fully
-	// initialized immediately upon startup. It also prevents capturing
-	// intermediate state (such as applications crashing shortly after booting),
-	// and ensures backend rate limits don't drop valuable shutdown scrapes
-	// because of an early startup scrape.
-	InitialScrapeOffset time.Duration
-
-	// IgnoreJitter causes all targets managed by this manager to be scraped
-	// as soon as they are discovered. By default, all targets have offset,
-	// so we spread the scraping load evenly within Prometheus server.
 	// NOTE(bwplotka): This option is experimental and not used by Prometheus.
-	// It was created for serverless flavors of OpenTelemetry contrib's prometheusreceiver.
-	IgnoreJitter bool
+	// It was created for serverless flavors of OpenTelemetry contrib's
+	// prometheusreceiver.
+	InitialScrapeOffset *time.Duration
 
 	// private option for testability.
 	skipJitterOffsetting bool
@@ -215,13 +205,13 @@ type Manager struct {
 
 // Run receives and saves target set updates and triggers the scraping loops reloading.
 // Reloading happens in the background so that it doesn't block receiving targets updates.
-func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) {
+func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	go m.reloader()
 	for {
 		select {
 		case ts, ok := <-tsets:
 			if !ok {
-				break
+				return nil
 			}
 			m.updateTsets(ts)
 
@@ -231,7 +221,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) {
 			}
 
 		case <-m.graceShut:
-			return
+			return nil
 		}
 	}
 }

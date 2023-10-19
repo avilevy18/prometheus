@@ -1784,7 +1784,8 @@ func TestManager_InitialScrapeOffset(t *testing.T) {
 	} {
 		t.Run(tcase.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				opts := &Options{InitialScrapeOffset: tcase.initialScrapeOffset}
+				val := tcase.initialScrapeOffset
+				opts := &Options{InitialScrapeOffset: &val}
 				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts)
 				defer cleanupConns()
 
@@ -1849,9 +1850,10 @@ func TestManager_ScrapeOnShutdown(t *testing.T) {
 	} {
 		t.Run(tcase.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
+				val := tcase.initialScrapeOffset
 				opts := &Options{
 					ScrapeOnShutdown:    tcase.scrapeOnShutdown,
-					InitialScrapeOffset: tcase.initialScrapeOffset,
+					InitialScrapeOffset: &val,
 				}
 				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts)
 				defer cleanupConns()

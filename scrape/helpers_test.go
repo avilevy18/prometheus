@@ -89,7 +89,8 @@ func withAppendable(app compatAppendable, appV2 bool) func(sl *scrapeLoop) {
 func newTestScrapeLoop(t testing.TB, opts ...func(sl *scrapeLoop)) (_ *scrapeLoop, scraper *testScraper) {
 	metrics := newTestScrapeMetrics(t)
 	sl := &scrapeLoop{
-		stopped: make(chan struct{}),
+		stopped:                  make(chan struct{}),
+		stopAfterScrapeAttemptCh: make(chan time.Time, 1),
 
 		l:     promslog.NewNopLogger(),
 		cache: newScrapeCache(metrics),

@@ -1249,8 +1249,15 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 		passMetadataInContext:   opts.sp.options.PassMetadataInContext,
 		skipJitterOffsetting:    opts.sp.options.skipJitterOffsetting,
 		scrapeOnShutdown:        opts.sp.options.ScrapeOnShutdown,
-		initialScrapeOffset:     opts.sp.options.InitialScrapeOffset,
+		initialScrapeOffset:     durationOrDefault(opts.sp.options.InitialScrapeOffset, 0),
 	}
+}
+
+func durationOrDefault(d *time.Duration, def time.Duration) time.Duration {
+	if d == nil {
+		return def
+	}
+	return *d
 }
 
 func (sl *scrapeLoop) setScrapeFailureLogger(l FailureLogger) {
@@ -1263,19 +1270,24 @@ func (sl *scrapeLoop) setScrapeFailureLogger(l FailureLogger) {
 }
 
 func (sl *scrapeLoop) getScrapeOffset() time.Duration {
-	offset := sl.scraper.offset(sl.interval, sl.offsetSeed)
-	if sl.skipJitterOffsetting {
-		offset = time.Duration(0)
+	if sl.opts != nil && sl.opts.InitialScrapeOffset != nil {
+		return *sl.opts.InitialScrapeOffset
 	}
-	return sl.initialScrapeOffset + offset
+	if sl.skipJitterOffsetting {
+		return time.Duration(0)
+	}
+	return sl.scraper.offset(sl.interval, sl.offsetSeed)
 }
 
 func (sl *scrapeLoop) run(errc chan<- error) {
-	defer close(sl.stopAfterScrapeAttemptCh)
+	if sl.stopAfterScrapeAttemptCh != nil {
+		defer close(sl.stopAfterScrapeAttemptCh)
+	}
 
 	var (
 		last   time.Time
 		ticker = time.NewTicker(sl.interval)
+		stopAfterScrapeAttemptCh <-chan time.Time = sl.stopAfterScrapeAttemptCh
 	)
 	defer func() {
 		if sl.scrapeOnShutdown {
@@ -1299,8 +1311,12 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 			// Continue after a scraping offset.
 		case <-sl.ctx.Done():
 			return
-		case <-sl.stopAfterScrapeAttemptCh:
+		case minScrapeTime := <-stopAfterScrapeAttemptCh:
 			sl.cancel()
+			if !minScrapeTime.Before(last) {
+				sl.scrapeAndReport(last, time.Now().Round(0), errc)
+			}
+			return
 		}
 	}
 
@@ -1312,11 +1328,13 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 		select {
 		case <-sl.ctx.Done():
 			return
-		case minScrapeTime := <-sl.stopAfterScrapeAttemptCh:
+		case minScrapeTime := <-stopAfterScrapeAttemptCh:
 			sl.cancel()
 			if minScrapeTime.Before(last) {
 				return
 			}
+			sl.scrapeAndReport(last, time.Now().Round(0), errc)
+			return
 		default:
 		}
 
@@ -1345,11 +1363,13 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 		select {
 		case <-sl.ctx.Done():
 			return
-		case minScrapeTime := <-sl.stopAfterScrapeAttemptCh:
+		case minScrapeTime := <-stopAfterScrapeAttemptCh:
 			sl.cancel()
 			if minScrapeTime.Before(last) {
 				return
 			}
+			sl.scrapeAndReport(last, time.Now().Round(0), errc)
+			return
 		case <-ticker.C:
 		}
 	}
