@@ -115,7 +115,6 @@ type Options struct {
 
 	// Option to enable the ingestion of the created timestamp as a synthetic zero sample.
 	// See: https://github.com/prometheus/proposals/blob/main/proposals/2023-06-13_created-timestamp.md
-	//
 	// NOTE: This option has no effect for AppenderV2 and will be removed with the AppenderV1
 	// removal.
 	EnableStartTimestampZeroIngestion bool
