@@ -792,6 +792,7 @@ func TestTargetSetTargetGroupsPresentOnStartup(t *testing.T) {
 		updatert        time.Duration
 		readTimeout     time.Duration
 		expectedTargets int
+		opts            []func(*Manager)
 	}{
 		{
 			name:        "startup wait with long interval times out",
@@ -809,6 +810,7 @@ func TestTargetSetTargetGroupsPresentOnStartup(t *testing.T) {
 			updatert:        100 * time.Hour,
 			readTimeout:     300 * time.Millisecond,
 			expectedTargets: 1,
+			opts:            []func(*Manager){SkipInitialWait()},
 		},
 	}
 
@@ -820,8 +822,7 @@ func TestTargetSetTargetGroupsPresentOnStartup(t *testing.T) {
 				reg := prometheus.NewRegistry()
 				sdMetrics := NewTestMetrics(t, reg)
 
-				opts := make([]func(*Manager), 0)
-				discoveryManager := NewManager(ctx, promslog.NewNopLogger(), reg, sdMetrics, opts...)
+				discoveryManager := NewManager(ctx, promslog.NewNopLogger(), reg, sdMetrics, tc.opts...)
 				require.NotNil(t, discoveryManager)
 
 				discoveryManager.updatert = tc.updatert
