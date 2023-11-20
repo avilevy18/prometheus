@@ -1036,6 +1036,10 @@ func TestScrapeLoopStopBeforeRun(t *testing.T) {
 
 	sl, scraper := newTestScrapeLoop(t)
 
+	// The loop must terminate during the initial offset if the context
+	// is canceled.
+	scraper.offsetDur = time.Hour
+
 	// The scrape pool synchronizes on stopping scrape loops. However, new scrape
 	// loops are started asynchronously. Thus, it's possible, that a loop is stopped
 	// again before having started properly.
