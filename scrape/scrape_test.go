@@ -24,7 +24,7 @@ import (
 	"log/slog"
 	"maps"
 	"math"
-	"net"
+
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -52,7 +52,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/atomic"
 	"go.uber.org/goleak"
-	"go.yaml.in/yaml/v2"
 
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
@@ -6796,8 +6795,6 @@ func TestScrapeOffsetDistribution(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		startTime := time.Now()
 
-		listener := newPipeListener()
-
 		var mu sync.Mutex
 		scrapeTimes := make(map[string][]time.Duration)
 
@@ -6816,30 +6813,6 @@ func TestScrapeOffsetDistribution(t *testing.T) {
 			}
 		})
 
-		srv := httptest.NewUnstartedServer(handler)
-		srv.Listener = listener
-		srv.Start()
-		t.Cleanup(srv.Close)
-
-		app := teststorage.NewAppendable()
-		opts := &Options{
-			HTTPClientOptions: []config_util.HTTPClientOption{
-				config_util.WithDialContextFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
-					srvConn, cliConn := net.Pipe()
-					select {
-					case listener.conns <- srvConn:
-						return cliConn, nil
-					case <-listener.closed:
-						return nil, net.ErrClosed
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					}
-				}),
-			},
-		}
-		scrapeManager, err := NewManager(opts, promslog.NewNopLogger(), nil, app, nil, prometheus.NewRegistry())
-		require.NoError(t, err)
-
 		var targets []model.LabelSet
 		for i := range 5 {
 			targets = append(targets, model.LabelSet{
@@ -6849,24 +6822,8 @@ func TestScrapeOffsetDistribution(t *testing.T) {
 			})
 		}
 
-		scrapeManager.updateTsets(map[string][]*targetgroup.Group{
-			"test": {{Targets: targets}},
-		})
-
-		cfg := &config.Config{
-			GlobalConfig: config.GlobalConfig{
-				ScrapeInterval:  model.Duration(interval),
-				ScrapeTimeout:   model.Duration(interval),
-				ScrapeProtocols: []config.ScrapeProtocol{config.PrometheusProto},
-			},
-			ScrapeConfigs: []*config.ScrapeConfig{{JobName: "test"}},
-		}
-		cfgText, err := yaml.Marshal(*cfg)
-		require.NoError(t, err)
-		cfg = loadConfiguration(t, string(cfgText))
-		require.NoError(t, scrapeManager.ApplyConfig(cfg))
-
-		scrapeManager.reload()
+		scrapeManager, _, cleanupConns := setupSynctestManager(t, nil, interval, targets, handler)
+		defer cleanupConns()
 
 		time.Sleep(19 * time.Second)
 		synctest.Wait()

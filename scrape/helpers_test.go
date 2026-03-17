@@ -280,21 +280,10 @@ func (*pipeListener) Addr() net.Addr { return pipeAddr{} }
 // startFakeHTTPServer spins up a httptest.Server bound to an in-memory
 // pipeListener. It returns the listener (to be wired to a custom dialer) and a
 // cleanup function to shut down the server.
-func startFakeHTTPServer(t *testing.T) (*pipeListener, func()) {
+func startFakeHTTPServer(t *testing.T, handler http.Handler) (*pipeListener, func()) {
 	t.Helper()
 
 	listener := newPipeListener()
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Abort if the request context is canceled (e.g., due to a scrape timeout).
-		select {
-		case <-r.Context().Done():
-			return
-		default:
-			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-			fmt.Fprintln(w, "expected_metric 1")
-		}
-	})
 
 	srv := httptest.NewUnstartedServer(handler)
 	srv.Listener = listener
@@ -307,16 +296,15 @@ func startFakeHTTPServer(t *testing.T) (*pipeListener, func()) {
 
 // setupSynctestManager abstracts the boilerplate of creating a mock network,
 // starting the fake HTTP server, and configuring the scrape manager for synctest.
-func setupSynctestManager(t *testing.T, opts *Options, interval time.Duration) (*Manager, *teststorage.Appendable, func()) {
+func setupSynctestManager(t *testing.T, opts *Options, interval time.Duration, targets []model.LabelSet, handler http.Handler) (*Manager, *teststorage.Appendable, func()) {
 	t.Helper()
 	app := teststorage.NewAppendable()
 
-	listener, cleanup := startFakeHTTPServer(t)
+	listener, cleanup := startFakeHTTPServer(t, handler)
 
 	if opts == nil {
 		opts = &Options{}
 	}
-	opts.skipJitterOffsetting = true
 
 	// Ensure the scraper creates a new net.Pipe on every dial attempt
 	// and hands the server-side connection to the mock server's listener.
@@ -358,10 +346,7 @@ func setupSynctestManager(t *testing.T, opts *Options, interval time.Duration) (
 
 	scrapeManager.updateTsets(map[string][]*targetgroup.Group{
 		"test": {{
-			Targets: []model.LabelSet{{
-				model.SchemeLabel:  "http",
-				model.AddressLabel: "test.local",
-			}},
+			Targets: targets,
 		}},
 	})
 

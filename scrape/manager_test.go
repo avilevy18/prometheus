@@ -1598,6 +1598,23 @@ scrape_configs:
 	}
 }
 
+func defaultSynctestTargetsAndHandler() ([]model.LabelSet, http.Handler) {
+	targets := []model.LabelSet{{
+		model.SchemeLabel:  "http",
+		model.AddressLabel: "test.local",
+	}}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			fmt.Fprintln(w, "expected_metric 1")
+		}
+	})
+	return targets, handler
+}
+
 func TestManager_InitialScrapeOffset(t *testing.T) {
 	interval := 10 * time.Second
 
@@ -1624,8 +1641,9 @@ func TestManager_InitialScrapeOffset(t *testing.T) {
 	} {
 		t.Run(tcase.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				opts := &Options{InitialScrapeOffset: tcase.initialScrapeOffset}
-				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts, interval)
+				opts := &Options{InitialScrapeOffset: tcase.initialScrapeOffset, skipJitterOffsetting: true}
+				targets, handler := defaultSynctestTargetsAndHandler()
+				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts, interval, targets, handler)
 				defer cleanupConns()
 
 				// Wait for the scrape manager to block on its timers.
@@ -1688,10 +1706,12 @@ func TestManager_ScrapeOnShutdown(t *testing.T) {
 		t.Run(tcase.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				opts := &Options{
-					ScrapeOnShutdown:    tcase.scrapeOnShutdown,
-					InitialScrapeOffset: tcase.initialScrapeOffset,
+					ScrapeOnShutdown:     tcase.scrapeOnShutdown,
+					InitialScrapeOffset:  tcase.initialScrapeOffset,
+					skipJitterOffsetting: true,
 				}
-				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts, interval)
+				targets, handler := defaultSynctestTargetsAndHandler()
+				scrapeManager, app, cleanupConns := setupSynctestManager(t, opts, interval, targets, handler)
 				defer cleanupConns()
 
 				// Wait for the initial scrape to happen exactly at t=0.
