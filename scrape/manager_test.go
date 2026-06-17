@@ -770,7 +770,7 @@ func TestManagerTargetsUpdates(t *testing.T) {
 func TestManagerSkipInitialWait(t *testing.T) {
 	opts := Options{DiscoveryReloadOnStartup: true}
 	testRegistry := prometheus.NewRegistry()
-	m, err := NewManager(&opts, nil, nil, testRegistry)
+	m, err := NewManager(&opts, nil, nil, nil, teststorage.NewAppendable(), testRegistry)
 	require.NoError(t, err)
 
 	ts := make(chan map[string][]*targetgroup.Group, 1)
